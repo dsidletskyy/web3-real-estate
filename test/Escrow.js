@@ -118,4 +118,71 @@ describe('Escrow', () => {
             expect(await escrow.approval(1, buyer.address)).to.be.equal(true)
         })
     })
+
+    describe("Cancel sale", () => {
+        it("Returns earnest money to buyer when sale is cancelled", async () => {
+            // Get initial balances
+            const initialBuyerBalance = await ethers.provider.getBalance(buyer.address)
+
+            // Deposit earnest money
+            const transaction = await escrow.connect(buyer).depositEarnest(1, { value: tokens(5) })
+            const receipt = await transaction.wait()
+
+            // Verify contract has the earnest money
+            expect(await escrow.getBalance()).to.be.equal(tokens(5))
+
+            // Cancel the sale
+            const cancelTx = await escrow.cancelSale(1)
+            const cancelReceipt = await cancelTx.wait()
+
+            // Verify contract balance is 0
+            expect(await escrow.getBalance()).to.be.equal(0)
+
+            // Get final buyer balance
+            const finalBuyerBalance = await ethers.provider.getBalance(buyer.address)
+
+            // Calculate gas costs for both transactions
+            const depositGasCost = receipt.gasUsed.mul(receipt.effectiveGasPrice)
+            const cancelGasCost = cancelReceipt.gasUsed.mul(cancelReceipt.effectiveGasPrice)
+            const totalGasCost = depositGasCost.add(cancelGasCost)
+
+            // Verify buyer received their money back (accounting for gas costs)
+            expect(finalBuyerBalance).to.be.closeTo(
+                initialBuyerBalance.sub(totalGasCost),
+                ethers.utils.parseEther("0.1") // Allow for some gas cost variation
+            )
+        })
+    })
+
+    describe("Sale", () => {
+        beforeEach(async () => {
+            let transaction = await escrow.connect(buyer).depositEarnest(1, { value: tokens(5) })
+            await transaction.wait()
+
+            transaction = await escrow.connect(inspector).updateInspectionStatus(1, true)
+            await transaction.wait()
+
+            transaction = await escrow.connect(seller).approveSale(1)
+            await transaction.wait()
+
+            transaction = await escrow.connect(lender).approveSale(1)
+            await transaction.wait()
+
+            transaction = await escrow.connect(buyer).approveSale(1)
+            await transaction.wait()
+
+            await lender.sendTransaction({ to: escrow.address, value: tokens(5) })
+
+            transaction = await escrow.connect(seller).finalizeSale(1)
+            await transaction.wait()
+        })
+
+        it("Updates ownership", async () => {
+            expect(await realEstate.ownerOf(1)).to.be.equal(buyer.address)
+        })
+
+        it("Updates balance", async () => {
+            expect(await escrow.getBalance()).to.be.equal(0)
+        })
+    })
 })
